@@ -1,0 +1,1 @@
+./main -steps 10 -width 10 -type fft -kernel compute_bound -iter 1024 -worker 1

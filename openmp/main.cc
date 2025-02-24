@@ -386,7 +386,7 @@ OpenMPApp::OpenMPApp(int argc, char **argv)
       extra_local_memory[k] = NULL;
     }
   }
-  
+  printf("nb_workers %d\n", nb_workers);
  // omp_set_dynamic(1);
   omp_set_num_threads(nb_workers);
   

@@ -1,0 +1,2 @@
+CompileFlags:
+  Add: [-std=c++11, -Wall, -fopenmp, -O3, -march=native, -I../core, -L../core, -lcore_s]
