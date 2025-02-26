@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include "core.h"
 #include "timer.h"
-
+#include <map>
 #define VERBOSE_LEVEL 0
 #define USE_CORE_VERIFICATION
 
@@ -208,7 +208,16 @@ void SerialApp::debug_printf(int verbose_level, const char *format, ...)
 
 int main(int argc, char ** argv)
 {
+  std::map<uint64_t, uint64_t>* params =  new std::map<uint64_t, uint64_t>();
+  params->insert(std::make_pair(1, 10));
+  params->insert(std::make_pair(2, 20));
+  params->insert(std::make_pair(3, 30));
+  params->insert(std::make_pair(4, 40));
+  params->insert(std::make_pair(5, 50));
+  params->insert(std::make_pair(6, 60));
+  params->insert(std::make_pair(7, 70));
   SerialApp app(argc, argv);
   app.execute_main_loop();
+  delete params;
   return 0;
 }
