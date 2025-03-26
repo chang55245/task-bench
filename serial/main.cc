@@ -8,10 +8,12 @@
 #include <unistd.h>
 #include "core.h"
 #include "timer.h"
-#include <map>
+// #include "dash.h"
+
 #define VERBOSE_LEVEL 0
 #define USE_CORE_VERIFICATION
 
+extern "C" {
 typedef struct tile_s {
   float dep;
   char *output_buff;
@@ -34,6 +36,11 @@ char *scratch_memory = NULL;
 
 static inline void task1(tile_t *tile_out, payload_t payload)
 {
+  if (tile_out == NULL || tile_out->output_buff == NULL) {
+    fprintf(stderr, "Error: NULL pointer in task1 at position (%d, %d)\n", payload.x, payload.y);
+    return;
+  }
+
 #if defined (USE_CORE_VERIFICATION)    
   TaskGraph graph = payload.graph;
   char *output_ptr = (char*)tile_out->output_buff;
@@ -54,6 +61,11 @@ static inline void task1(tile_t *tile_out, payload_t payload)
 
 static inline void task2(tile_t *tile_out, const std::vector<tile_t*> &tile_in, payload_t payload)
 {
+  if (tile_out == NULL || tile_out->output_buff == NULL) {
+    fprintf(stderr, "Error: NULL pointer in task2 output at position (%d, %d)\n", payload.x, payload.y);
+    return;
+  }
+
 #if defined (USE_CORE_VERIFICATION)    
   TaskGraph graph = payload.graph;
   char *output_ptr = (char*)tile_out->output_buff;
@@ -63,6 +75,11 @@ static inline void task2(tile_t *tile_out, const std::vector<tile_t*> &tile_in, 
   
   // Add all input dependencies
   for (size_t i = 0; i < tile_in.size(); i++) {
+    if (tile_in[i] == NULL || tile_in[i]->output_buff == NULL) {
+      fprintf(stderr, "Error: NULL pointer in task2 input %zu at position (%d, %d)\n", 
+              i, payload.x, payload.y);
+      return;
+    }
     input_ptrs.push_back((char*)tile_in[i]->output_buff);
     input_bytes.push_back(graph.output_bytes_per_task);
   }
@@ -73,6 +90,11 @@ static inline void task2(tile_t *tile_out, const std::vector<tile_t*> &tile_in, 
 #else  
   tile_out->dep = 0;
   for (size_t i = 0; i < tile_in.size(); i++) {
+    if (tile_in[i] == NULL) {
+      fprintf(stderr, "Error: NULL pointer in task2 input %zu at position (%d, %d)\n", 
+              i, payload.x, payload.y);
+      continue;
+    }
     tile_out->dep += tile_in[i]->dep;
   }
   printf("Task2 x %d, y %d, out %f\n", payload.x, payload.y, tile_out->dep);
@@ -160,38 +182,90 @@ void SerialApp::execute_main_loop()
 
 void SerialApp::execute_timestep(size_t idx, long t)
 {
+  if (idx >= graphs.size()) {
+    fprintf(stderr, "Error: Invalid graph index %zu (max: %zu)\n", idx, graphs.size()-1);
+    return;
+  }
+
   const TaskGraph &g = graphs[idx];
   long offset = g.offset_at_timestep(t);
   long width = g.width_at_timestep(t);
   long dset = g.dependence_set_at_timestep(t);
   int nb_fields = g.nb_fields;
   
+  if (matrix == NULL || matrix[idx].data == NULL) {
+    fprintf(stderr, "Error: NULL matrix data for graph %zu\n", idx);
+    return;
+  }
+  
+  if (nb_fields <= 0) {
+    fprintf(stderr, "Error: Invalid number of fields %d for graph %zu\n", nb_fields, idx);
+    return;
+  }
+  
   payload_t payload;
   payload.graph = g;
   
   for (int x = offset; x <= offset+width-1; x++) {
+    printf("timestep: %d, dep: %ld\n", t, x);
+    if (x < 0 || x >= matrix[idx].N) {
+      fprintf(stderr, "Error: x index %d out of bounds [0, %d) at timestep %ld\n", 
+              x, matrix[idx].N, t);
+      continue;
+    }
+    
+    // NonKernelSplit();
     std::vector<std::pair<long, long> > deps = g.dependencies(dset, x);   
     
     payload.x = x;
     payload.y = t;
     
+    int row_idx = t % nb_fields;
+    long array_idx = row_idx * matrix[idx].N + x;
+    
+    if (array_idx < 0 || array_idx >= matrix[idx].M * matrix[idx].N) {
+      fprintf(stderr, "Error: Array index %ld out of bounds [0, %d) at position (%d, %ld)\n", 
+              array_idx, matrix[idx].M * matrix[idx].N, x, t);
+      continue;
+    }
+    
     if (deps.size() == 0) {
       // No dependencies, execute task1
-      task1(&matrix[idx].data[t % nb_fields * matrix[idx].N + x], payload);
+      task1(&matrix[idx].data[array_idx], payload);
     } else {
       if (t == 0) {
         // First timestep, execute task1
-        task1(&matrix[idx].data[t % nb_fields * matrix[idx].N + x], payload);
+        task1(&matrix[idx].data[array_idx], payload);
       } else {
         // Handle dependencies
-        tile_t *out = &matrix[idx].data[t % nb_fields * matrix[idx].N + x];
+        tile_t *out = &matrix[idx].data[array_idx];
         std::vector<tile_t*> inputs;
+        
         for (size_t i = 0; i < deps.size(); i++) {
-          inputs.push_back(&matrix[idx].data[(t-1) % nb_fields * matrix[idx].N + deps[i].first]);
+          long dep_x = deps[i].first;
+          
+          if (dep_x < 0 || dep_x >= matrix[idx].N) {
+            fprintf(stderr, "Error: Dependency x index %ld out of bounds [0, %d) at position (%d, %ld)\n", 
+                    dep_x, matrix[idx].N, x, t);
+            continue;
+          }
+          
+          int prev_row_idx = (t-1) % nb_fields;
+          long dep_array_idx = prev_row_idx * matrix[idx].N + dep_x;
+          
+          if (dep_array_idx < 0 || dep_array_idx >= matrix[idx].M * matrix[idx].N) {
+            fprintf(stderr, "Error: Dependency array index %ld out of bounds [0, %d) at position (%d, %ld)\n", 
+                    dep_array_idx, matrix[idx].M * matrix[idx].N, x, t);
+            continue;
+          }
+          
+          inputs.push_back(&matrix[idx].data[dep_array_idx]);
         }
+        
         task2(out, inputs, payload);
       }
-    }
+    } 
+    // NonKernelSplit();
   }
 }
 
@@ -208,16 +282,21 @@ void SerialApp::debug_printf(int verbose_level, const char *format, ...)
 
 int main(int argc, char ** argv)
 {
-  std::map<uint64_t, uint64_t>* params =  new std::map<uint64_t, uint64_t>();
-  params->insert(std::make_pair(1, 10));
-  params->insert(std::make_pair(2, 20));
-  params->insert(std::make_pair(3, 30));
-  params->insert(std::make_pair(4, 40));
-  params->insert(std::make_pair(5, 50));
-  params->insert(std::make_pair(6, 60));
-  params->insert(std::make_pair(7, 70));
+  argc = 8;
+  argv[0] = "-steps";
+  argv[1] = "2";
+  argv[2] = "-width";
+  argv[3] = "2";
+  argv[4] = "-type";
+  argv[5] = "stencil_1d";
+  argv[6] = "-kernel";
+  argv[7] = "compute_bound";
+  argv[8] = "-iter";
+  argv[9] = "4096";
+  argv[10] = "-worker";
+  argv[11] = "1";
   SerialApp app(argc, argv);
   app.execute_main_loop();
-  delete params;
   return 0;
+}
 }
